@@ -1,0 +1,463 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== USERS ====================
+
+model User {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  username         String    @unique
+  passwordHash     String
+  status           UserStatus @default(PENDING)
+  role             UserRole   @default(USER)
+  kycStatus        KYCStatus  @default(NONE)
+  twoFactorEnabled Boolean   @default(false)
+  twoFactorSecret  String?
+  emailVerified    Boolean   @default(false)
+  lastLoginAt      DateTime?
+  lastLoginIp      String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  wallets          Wallet[]
+  orders           Order[]
+  trades           Trade[]
+  apiKeys          ApiKey[]
+  depositAddresses DepositAddress[]
+  transactions     Transaction[]
+  liquidityPositions LiquidityPosition[]
+  refreshTokens    RefreshToken[]
+
+  @@index([email])
+  @@index([username])
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  BANNED
+}
+
+enum UserRole {
+  USER
+  VIP
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum KYCStatus {
+  NONE
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+model ApiKey {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  keyHash     String   @unique
+  permissions String[] // READ, TRADE, WITHDRAW
+  ipWhitelist String[]
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([keyHash])
+}
+
+// ==================== COINS & TRADING PAIRS ====================
+
+model Coin {
+  id                String     @id @default(cuid())
+  symbol            String     @unique
+  name              String
+  status            CoinStatus @default(ACTIVE)
+  decimals          Int
+  minDeposit        Decimal    @db.Decimal(36, 18)
+  minWithdrawal     Decimal    @db.Decimal(36, 18)
+  maxWithdrawal     Decimal    @db.Decimal(36, 18)
+  withdrawalFee     Decimal    @db.Decimal(36, 18)
+  depositEnabled    Boolean    @default(true)
+  withdrawalEnabled Boolean    @default(true)
+  tradingEnabled    Boolean    @default(true)
+  iconUrl           String?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  networks          CoinNetwork[]
+  walletsAsCoin     Wallet[]
+  basePairs         TradingPair[] @relation("BaseCoin")
+  quotePairs        TradingPair[] @relation("QuoteCoin")
+  depositAddresses  DepositAddress[]
+  transactions      Transaction[]
+  basePools         LiquidityPool[] @relation("BasePool")
+  quotePools        LiquidityPool[] @relation("QuotePool")
+
+  @@index([symbol])
+}
+
+enum CoinStatus {
+  ACTIVE
+  MAINTENANCE
+  DELISTED
+}
+
+model CoinNetwork {
+  id                String      @id @default(cuid())
+  coinId            String
+  network           NetworkType
+  contractAddress   String?
+  depositEnabled    Boolean     @default(true)
+  withdrawalEnabled Boolean     @default(true)
+  minConfirmations  Int
+  withdrawalFee     Decimal     @db.Decimal(36, 18)
+  minWithdrawal     Decimal     @db.Decimal(36, 18)
+  maxWithdrawal     Decimal     @db.Decimal(36, 18)
+  memoRequired      Boolean     @default(false)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  coin Coin @relation(fields: [coinId], references: [id], onDelete: Cascade)
+
+  @@unique([coinId, network])
+  @@index([coinId])
+}
+
+enum NetworkType {
+  NATIVE
+  SOLANA
+  ETHEREUM
+  BSC
+  POLYGON
+  AVALANCHE
+  ARBITRUM
+  OPTIMISM
+  BASE
+  TRON
+  BITCOIN
+}
+
+model TradingPair {
+  id          String            @id @default(cuid())
+  symbol      String            @unique
+  baseCoinId  String
+  quoteCoinId String
+  status      TradingPairStatus @default(ACTIVE)
+  minQuantity Decimal           @db.Decimal(36, 18)
+  maxQuantity Decimal           @db.Decimal(36, 18)
+  minPrice    Decimal           @db.Decimal(36, 18)
+  maxPrice    Decimal           @db.Decimal(36, 18)
+  tickSize    Decimal           @db.Decimal(36, 18)
+  stepSize    Decimal           @db.Decimal(36, 18)
+  makerFee    Decimal           @db.Decimal(10, 6)
+  takerFee    Decimal           @db.Decimal(10, 6)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  baseCoin  Coin    @relation("BaseCoin", fields: [baseCoinId], references: [id])
+  quoteCoin Coin    @relation("QuoteCoin", fields: [quoteCoinId], references: [id])
+  orders    Order[]
+  trades    Trade[]
+
+  @@index([symbol])
+  @@index([baseCoinId])
+  @@index([quoteCoinId])
+}
+
+enum TradingPairStatus {
+  ACTIVE
+  HALTED
+  DELISTED
+}
+
+// ==================== WALLETS & TRANSACTIONS ====================
+
+model Wallet {
+  id               String     @id @default(cuid())
+  userId           String
+  coinId           String
+  type             WalletType @default(SPOT)
+  balance          Decimal    @db.Decimal(36, 18) @default(0)
+  lockedBalance    Decimal    @db.Decimal(36, 18) @default(0)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  coin Coin @relation(fields: [coinId], references: [id])
+
+  @@unique([userId, coinId, type])
+  @@index([userId])
+  @@index([coinId])
+}
+
+enum WalletType {
+  SPOT
+  MARGIN
+  FUTURES
+}
+
+model DepositAddress {
+  id        String   @id @default(cuid())
+  userId    String
+  coinId    String
+  network   String
+  address   String
+  memo      String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  coin Coin @relation(fields: [coinId], references: [id])
+
+  @@unique([userId, coinId, network])
+  @@index([userId])
+  @@index([address])
+}
+
+model Transaction {
+  id                    String            @id @default(cuid())
+  userId                String
+  coinId                String
+  type                  TransactionType
+  status                TransactionStatus @default(PENDING)
+  amount                Decimal           @db.Decimal(36, 18)
+  fee                   Decimal           @db.Decimal(36, 18) @default(0)
+  txHash                String?
+  network               String?
+  fromAddress           String?
+  toAddress             String?
+  confirmations         Int               @default(0)
+  requiredConfirmations Int               @default(1)
+  memo                  String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  completedAt           DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  coin Coin @relation(fields: [coinId], references: [id])
+
+  @@index([userId])
+  @@index([coinId])
+  @@index([txHash])
+  @@index([status])
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  TRADE
+  FEE
+  TRANSFER
+  AIRDROP
+  STAKING_REWARD
+}
+
+enum TransactionStatus {
+  PENDING
+  CONFIRMING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// ==================== ORDERS & TRADES ====================
+
+model Order {
+  id                String        @id @default(cuid())
+  userId            String
+  tradingPairId     String
+  symbol            String
+  side              OrderSide
+  type              OrderType
+  status            OrderStatus   @default(PENDING)
+  price             Decimal?      @db.Decimal(36, 18)
+  quantity          Decimal       @db.Decimal(36, 18)
+  filledQuantity    Decimal       @db.Decimal(36, 18) @default(0)
+  remainingQuantity Decimal       @db.Decimal(36, 18)
+  averagePrice      Decimal?      @db.Decimal(36, 18)
+  stopPrice         Decimal?      @db.Decimal(36, 18)
+  timeInForce       TimeInForce   @default(GTC)
+  clientOrderId     String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  expiresAt         DateTime?
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tradingPair TradingPair @relation(fields: [tradingPairId], references: [id])
+  buyTrades   Trade[]     @relation("BuyerOrder")
+  sellTrades  Trade[]     @relation("SellerOrder")
+
+  @@index([userId])
+  @@index([tradingPairId])
+  @@index([symbol])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderType {
+  LIMIT
+  MARKET
+  STOP_LIMIT
+  STOP_MARKET
+}
+
+enum OrderStatus {
+  PENDING
+  OPEN
+  PARTIALLY_FILLED
+  FILLED
+  CANCELLED
+  REJECTED
+  EXPIRED
+}
+
+enum TimeInForce {
+  GTC
+  IOC
+  FOK
+  GTD
+}
+
+model Trade {
+  id             String    @id @default(cuid())
+  tradingPairId  String
+  symbol         String
+  price          Decimal   @db.Decimal(36, 18)
+  quantity       Decimal   @db.Decimal(36, 18)
+  quoteQuantity  Decimal   @db.Decimal(36, 18)
+  buyerOrderId   String
+  sellerOrderId  String
+  buyerUserId    String
+  sellerUserId   String
+  buyerFee       Decimal   @db.Decimal(36, 18)
+  sellerFee      Decimal   @db.Decimal(36, 18)
+  buyerFeeCoin   String
+  sellerFeeCoin  String
+  isBuyerMaker   Boolean
+  timestamp      DateTime  @default(now())
+
+  tradingPair TradingPair @relation(fields: [tradingPairId], references: [id])
+  buyerOrder  Order       @relation("BuyerOrder", fields: [buyerOrderId], references: [id])
+  sellerOrder Order       @relation("SellerOrder", fields: [sellerOrderId], references: [id])
+  buyerUser   User        @relation(fields: [buyerUserId], references: [id])
+
+  @@index([tradingPairId])
+  @@index([symbol])
+  @@index([buyerUserId])
+  @@index([sellerUserId])
+  @@index([timestamp])
+}
+
+// ==================== AMM / LIQUIDITY POOLS ====================
+
+model LiquidityPool {
+  id            String     @id @default(cuid())
+  symbol        String     @unique
+  baseCoinId    String
+  quoteCoinId   String
+  baseReserve   Decimal    @db.Decimal(36, 18) @default(0)
+  quoteReserve  Decimal    @db.Decimal(36, 18) @default(0)
+  lpTokenSupply Decimal    @db.Decimal(36, 18) @default(0)
+  fee           Decimal    @db.Decimal(10, 6) @default(0.003)
+  status        PoolStatus @default(ACTIVE)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  baseCoin  Coin                @relation("BasePool", fields: [baseCoinId], references: [id])
+  quoteCoin Coin                @relation("QuotePool", fields: [quoteCoinId], references: [id])
+  positions LiquidityPosition[]
+
+  @@index([symbol])
+  @@index([baseCoinId])
+  @@index([quoteCoinId])
+}
+
+enum PoolStatus {
+  ACTIVE
+  PAUSED
+  DEPRECATED
+}
+
+model LiquidityPosition {
+  id             String   @id @default(cuid())
+  userId         String
+  poolId         String
+  lpTokenBalance Decimal  @db.Decimal(36, 18) @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pool LiquidityPool @relation(fields: [poolId], references: [id])
+
+  @@unique([userId, poolId])
+  @@index([userId])
+  @@index([poolId])
+}
+
+// ==================== MARKET DATA ====================
+
+model Ticker {
+  id                 String   @id @default(cuid())
+  symbol             String   @unique
+  lastPrice          Decimal  @db.Decimal(36, 18)
+  priceChange        Decimal  @db.Decimal(36, 18)
+  priceChangePercent Decimal  @db.Decimal(10, 4)
+  highPrice          Decimal  @db.Decimal(36, 18)
+  lowPrice           Decimal  @db.Decimal(36, 18)
+  volume             Decimal  @db.Decimal(36, 18)
+  quoteVolume        Decimal  @db.Decimal(36, 18)
+  openPrice          Decimal  @db.Decimal(36, 18)
+  closePrice         Decimal  @db.Decimal(36, 18)
+  bidPrice           Decimal  @db.Decimal(36, 18)
+  askPrice           Decimal  @db.Decimal(36, 18)
+  updatedAt          DateTime @updatedAt
+
+  @@index([symbol])
+}
+
+model Kline {
+  id          String   @id @default(cuid())
+  symbol      String
+  interval    String
+  openTime    DateTime
+  closeTime   DateTime
+  open        Decimal  @db.Decimal(36, 18)
+  high        Decimal  @db.Decimal(36, 18)
+  low         Decimal  @db.Decimal(36, 18)
+  close       Decimal  @db.Decimal(36, 18)
+  volume      Decimal  @db.Decimal(36, 18)
+  quoteVolume Decimal  @db.Decimal(36, 18)
+  trades      Int
+
+  @@unique([symbol, interval, openTime])
+  @@index([symbol, interval])
+  @@index([openTime])
+}

@@ -182,6 +182,46 @@ export const EXAMPLE_COINS: CoinConfig[] = [
         minWithdrawal: '10',
         maxWithdrawal: '1000000',
       },
+      {
+        network: NetworkType.ALGORAND,
+        contractAddress: '31566704', // USDC ASA ID on Algorand
+        minConfirmations: 10,
+        withdrawalFee: '0.5',
+        minDeposit: '1',
+        minWithdrawal: '5',
+        maxWithdrawal: '1000000',
+      },
+    ],
+  },
+  {
+    symbol: 'ALGO',
+    name: 'Algorand',
+    decimals: 6,
+    networks: [
+      {
+        network: NetworkType.ALGORAND,
+        minConfirmations: 10,
+        withdrawalFee: '0.001',
+        minDeposit: '0.1',
+        minWithdrawal: '0.1',
+        maxWithdrawal: '10000000',
+      },
+    ],
+    tradingPairs: [
+      {
+        quoteCoin: 'USDT',
+        minQuantity: '1',
+        maxQuantity: '10000000',
+        tickSize: '0.0001',
+        stepSize: '1',
+      },
+      {
+        quoteCoin: 'USDC',
+        minQuantity: '1',
+        maxQuantity: '10000000',
+        tickSize: '0.0001',
+        stepSize: '1',
+      },
     ],
   },
 ];

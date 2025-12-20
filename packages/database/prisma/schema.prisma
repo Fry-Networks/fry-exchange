@@ -159,6 +159,7 @@ enum NetworkType {
   BASE
   TRON
   BITCOIN
+  ALGORAND
 }
 
 model TradingPair {

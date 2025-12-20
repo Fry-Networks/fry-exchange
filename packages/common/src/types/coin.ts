@@ -18,6 +18,7 @@ export enum NetworkType {
   BASE = 'BASE',
   TRON = 'TRON',
   BITCOIN = 'BITCOIN',
+  ALGORAND = 'ALGORAND',
 }
 
 export interface Coin {

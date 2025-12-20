@@ -4,3 +4,4 @@ export * from './services/WithdrawalService';
 export * from './chains/ChainAdapter';
 export * from './chains/SolanaAdapter';
 export * from './chains/EVMAdapter';
+export * from './chains/AlgorandAdapter';

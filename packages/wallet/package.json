@@ -16,6 +16,7 @@
     "@fry-exchange/common": "workspace:*",
     "@fry-exchange/database": "workspace:*",
     "@solana/web3.js": "^1.87.6",
+    "algosdk": "^2.7.0",
     "decimal.js": "^10.4.3",
     "ethers": "^6.9.0"
   },

@@ -21,6 +21,7 @@ export const DEFAULT_CONFIRMATIONS = {
   OPTIMISM: 20,
   BASE: 20,
   TRON: 20,
+  ALGORAND: 10,
 } as const;
 
 // Fee defaults (in decimal form, e.g., 0.001 = 0.1%)

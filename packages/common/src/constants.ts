@@ -34,6 +34,27 @@ export const VIP_TAKER_FEE = '0.0008';
 export const DEFAULT_POOL_FEE = '0.003'; // 0.3%
 export const MIN_LIQUIDITY = '1000'; // Minimum initial liquidity in USD equivalent
 
+// FRY Token Fee Configuration
+export const FRY_TOKEN = {
+  // FRY ASA ID on Algorand
+  ASA_ID: 2485314946,
+  // Address where all fees are collected
+  FEE_COLLECTION_ADDRESS: 'E2F2LT2INE75DBOYHQXTCTOP2PAP5MHAXQRXTTCCXFKHQTVG36DJONBQZE',
+  // FRY token decimals
+  DECIMALS: 6,
+  // Symbol for display
+  SYMBOL: 'FRY',
+  // Network
+  NETWORK: 'ALGORAND',
+} as const;
+
+// Vestige API Configuration for price fetching
+export const VESTIGE_API = {
+  BASE_URL: 'https://free-api.vestige.fi',
+  // Cache duration in milliseconds (1 minute as per Vestige's minimum cache time)
+  CACHE_DURATION_MS: 60_000,
+} as const;
+
 // API Response codes
 export const API_CODES = {
   SUCCESS: 0,

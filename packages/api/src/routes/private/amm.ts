@@ -148,6 +148,7 @@ ammRoutes.post('/swap', async (req: Request, res: Response) => {
         inputAmount: result.inputAmount,
         outputAmount: result.outputAmount,
         fee: result.fee,
+        fryFee: result.fryFee,
         priceImpact: result.priceImpact,
       },
     });

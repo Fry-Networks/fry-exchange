@@ -8,3 +8,6 @@ export * from './matching/types';
 
 // Events
 export * from './events';
+
+// Trade Settlement
+export * from './settlement/TradeSettlementService';

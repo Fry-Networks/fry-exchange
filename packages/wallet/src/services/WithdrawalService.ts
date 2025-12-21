@@ -6,10 +6,14 @@ import {
 import { Decimal, generateTransactionId, NetworkType, WithdrawalRequest } from '@fry-exchange/common';
 import { chainRegistry } from '../chains/ChainAdapter';
 import { walletService } from './WalletService';
+import { fryFeeService } from './FryFeeService';
+import { vestigePriceService } from './VestigePriceService';
 
 export interface WithdrawalResult {
   success: boolean;
   transactionId?: string;
+  fryFeeAmount?: string;
+  fryFeeTransactionId?: string;
   error?: string;
 }
 
@@ -61,11 +65,11 @@ export class WithdrawalService {
       };
     }
 
-    // Calculate fee
+    // Calculate network fee (in the coin being withdrawn)
     const fee = new Decimal(coinNetwork.withdrawalFee.toString());
     const totalDebit = withdrawalAmount.plus(fee);
 
-    // Check balance
+    // Check balance for the withdrawal amount
     const hasBalance = await walletService.hasAvailableBalance(
       userId,
       coinId,
@@ -76,11 +80,42 @@ export class WithdrawalService {
       return { success: false, error: 'Insufficient balance' };
     }
 
+    // Calculate FRY fee based on the withdrawal fee value in USD
+    // For simplicity, we assume the withdrawal fee is denominated in USD equivalent
+    const fryFeeCalc = await fryFeeService.calculateFeeInFry(fee);
+
+    // Check if user has sufficient FRY balance for the fee
+    const hasFryBalance = await fryFeeService.hassufficientFryBalance(
+      userId,
+      fryFeeCalc.fryFeeAmount
+    );
+
+    if (!hasFryBalance) {
+      return {
+        success: false,
+        error: `Insufficient FRY balance for withdrawal fee. Required: ${fryFeeCalc.fryFeeAmount.toString()} FRY`,
+      };
+    }
+
+    // Collect FRY fee first
+    const fryFeeResult = await fryFeeService.collectFee(
+      userId,
+      fryFeeCalc.fryFeeAmount,
+      'WITHDRAWAL'
+    );
+
+    if (!fryFeeResult.success) {
+      return {
+        success: false,
+        error: `Failed to collect FRY fee: ${fryFeeResult.error}`,
+      };
+    }
+
     // Create withdrawal transaction and debit balance
     const transactionId = generateTransactionId();
 
     await prisma.$transaction(async (tx) => {
-      // Debit balance
+      // Debit balance (only the withdrawal amount, fee is paid in FRY)
       await tx.wallet.update({
         where: {
           userId_coinId_type: {
@@ -90,7 +125,7 @@ export class WithdrawalService {
           },
         },
         data: {
-          balance: { decrement: totalDebit.toNumber() },
+          balance: { decrement: withdrawalAmount.toNumber() },
         },
       });
 
@@ -103,16 +138,21 @@ export class WithdrawalService {
           type: TransactionType.WITHDRAWAL,
           status: TransactionStatus.PENDING,
           amount: withdrawalAmount.toNumber(),
-          fee: fee.toNumber(),
+          fee: 0, // Fee is paid in FRY, not deducted from withdrawal
           network,
           toAddress: validation.normalized || address,
-          memo,
+          memo: memo ? `${memo} | FRY Fee: ${fryFeeCalc.fryFeeAmount.toString()}` : `FRY Fee: ${fryFeeCalc.fryFeeAmount.toString()}`,
           requiredConfirmations: coinNetwork.minConfirmations,
         },
       });
     });
 
-    return { success: true, transactionId };
+    return {
+      success: true,
+      transactionId,
+      fryFeeAmount: fryFeeCalc.fryFeeAmount.toString(),
+      fryFeeTransactionId: fryFeeResult.transactionId,
+    };
   }
 
   /**

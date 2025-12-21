@@ -2,9 +2,10 @@ import { Router, Request, Response } from 'express';
 import { createOrderSchema, cancelOrderSchema, API_CODES, Decimal } from '@fry-exchange/common';
 import { orderRateLimiter } from '../../middleware/rateLimit';
 import { requirePermission } from '../../middleware/auth';
-import { MatchingEngine, OrderRequest } from '@fry-exchange/core';
+import { MatchingEngine, OrderRequest, tradeSettlementService } from '@fry-exchange/core';
 import { prisma, OrderType, OrderSide, TimeInForce } from '@fry-exchange/database';
 import { generateOrderId } from '@fry-exchange/common';
+import { fryFeeService } from '@fry-exchange/wallet';
 
 export const orderRoutes = Router();
 
@@ -49,6 +50,23 @@ orderRoutes.post(
         return;
       }
 
+      // Collect FRY fees for each executed trade
+      const fryFees: { tradeId: string; takerFryFee: string; makerFryFee: string }[] = [];
+      for (const trade of result.trades) {
+        // Calculate trade value in USD for fee calculation
+        const tradeValueUsd = trade.price.mul(trade.quantity);
+
+        const settlementResult = await tradeSettlementService.settleTrade(trade, tradeValueUsd);
+
+        if (settlementResult.success) {
+          fryFees.push({
+            tradeId: trade.tradeId,
+            takerFryFee: settlementResult.takerFryFee || '0',
+            makerFryFee: settlementResult.makerFryFee || '0',
+          });
+        }
+      }
+
       res.status(201).json({
         code: API_CODES.SUCCESS,
         data: {
@@ -62,12 +80,16 @@ orderRoutes.post(
           filledQuantity: result.takerOrder.filledQuantity.toString(),
           remainingQuantity: result.takerOrder.remainingQuantity.toString(),
           averagePrice: result.takerOrder.averagePrice?.toString() || null,
-          trades: result.trades.map((t) => ({
-            tradeId: t.tradeId,
-            price: t.price.toString(),
-            quantity: t.quantity.toString(),
-            fee: t.takerFee.toString(),
-          })),
+          trades: result.trades.map((t) => {
+            const fryFee = fryFees.find((f) => f.tradeId === t.tradeId);
+            return {
+              tradeId: t.tradeId,
+              price: t.price.toString(),
+              quantity: t.quantity.toString(),
+              fee: t.takerFee.toString(),
+              fryFee: fryFee?.takerFryFee || '0',
+            };
+          }),
         },
       });
     } catch (error) {

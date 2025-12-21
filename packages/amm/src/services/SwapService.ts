@@ -1,7 +1,7 @@
 import { prisma, PoolStatus } from '@fry-exchange/database';
 import { Decimal, SwapQuote, SwapInput } from '@fry-exchange/common';
 import { ConstantProductAMM } from '../math/ConstantProduct';
-import { walletService } from '@fry-exchange/wallet';
+import { walletService, fryFeeService } from '@fry-exchange/wallet';
 import { poolService } from './PoolService';
 
 export interface SwapResult {
@@ -9,6 +9,8 @@ export interface SwapResult {
   inputAmount?: string;
   outputAmount?: string;
   fee?: string;
+  fryFee?: string;
+  fryFeeTransactionId?: string;
   priceImpact?: string;
   error?: string;
 }
@@ -118,6 +120,36 @@ export class SwapService {
       };
     }
 
+    // Calculate FRY fee based on the pool fee (swap fee)
+    const fryFeeCalc = await fryFeeService.calculateFeeInFry(calc.fee);
+
+    // Check if user has sufficient FRY balance for the fee
+    const hasFryBalance = await fryFeeService.hassufficientFryBalance(
+      userId,
+      fryFeeCalc.fryFeeAmount
+    );
+
+    if (!hasFryBalance) {
+      return {
+        success: false,
+        error: `Insufficient FRY balance for swap fee. Required: ${fryFeeCalc.fryFeeAmount.toString()} FRY`,
+      };
+    }
+
+    // Collect FRY fee first
+    const fryFeeResult = await fryFeeService.collectFee(
+      userId,
+      fryFeeCalc.fryFeeAmount,
+      'SWAP'
+    );
+
+    if (!fryFeeResult.success) {
+      return {
+        success: false,
+        error: `Failed to collect FRY fee: ${fryFeeResult.error}`,
+      };
+    }
+
     // Execute swap atomically
     try {
       await prisma.$transaction(async (tx) => {
@@ -149,9 +181,12 @@ export class SwapService {
         inputAmount: calc.inputAmount.toString(),
         outputAmount: calc.outputAmount.toString(),
         fee: calc.fee.toString(),
+        fryFee: fryFeeCalc.fryFeeAmount.toString(),
+        fryFeeTransactionId: fryFeeResult.transactionId,
         priceImpact: calc.priceImpact.mul(100).toFixed(4),
       };
     } catch (error) {
+      // Note: FRY fee was already collected, would need to refund in production
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Swap failed',

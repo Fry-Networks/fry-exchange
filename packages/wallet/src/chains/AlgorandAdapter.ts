@@ -153,6 +153,81 @@ export class AlgorandAdapter extends ChainAdapter {
   }
 
   /**
+   * Create an ASA transfer transaction (unsigned)
+   * This is used for preparing transactions that will be signed by a hot wallet
+   * @param fromAddress - Sender address
+   * @param toAddress - Recipient address
+   * @param amount - Amount to send (in smallest units)
+   * @param assetId - ASA ID
+   * @returns Unsigned transaction bytes
+   */
+  async createAsaTransferTransaction(
+    fromAddress: string,
+    toAddress: string,
+    amount: Decimal,
+    assetId: number
+  ): Promise<Uint8Array> {
+    const suggestedParams = await this.client.getTransactionParams().do();
+
+    const txn = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+      from: fromAddress,
+      to: toAddress,
+      amount: BigInt(amount.floor().toString()),
+      assetIndex: assetId,
+      suggestedParams,
+    });
+
+    return txn.toByte();
+  }
+
+  /**
+   * Create a payment transaction for native ALGO (unsigned)
+   * @param fromAddress - Sender address
+   * @param toAddress - Recipient address
+   * @param amount - Amount in ALGO
+   * @returns Unsigned transaction bytes
+   */
+  async createPaymentTransaction(
+    fromAddress: string,
+    toAddress: string,
+    amount: Decimal
+  ): Promise<Uint8Array> {
+    const suggestedParams = await this.client.getTransactionParams().do();
+
+    const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+      from: fromAddress,
+      to: toAddress,
+      amount: BigInt(amount.mul(MICROALGOS_PER_ALGO).floor().toString()),
+      suggestedParams,
+    });
+
+    return txn.toByte();
+  }
+
+  /**
+   * Submit a signed transaction to the network
+   * @param signedTxn - Signed transaction bytes
+   * @returns Transaction ID
+   */
+  async submitTransaction(signedTxn: Uint8Array): Promise<string> {
+    const response = await this.client.sendRawTransaction(signedTxn).do();
+    return response.txId;
+  }
+
+  /**
+   * Wait for transaction confirmation
+   * @param txId - Transaction ID
+   * @param rounds - Number of rounds to wait
+   * @returns Transaction info
+   */
+  async waitForConfirmation(
+    txId: string,
+    rounds: number = 10
+  ): Promise<Record<string, unknown>> {
+    return algosdk.waitForConfirmation(this.client, txId, rounds);
+  }
+
+  /**
    * Create an opt-in transaction for an ASA
    * User must opt-in before receiving ASA tokens
    */

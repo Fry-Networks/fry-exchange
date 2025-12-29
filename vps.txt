@@ -1,0 +1,1092 @@
+================================================================================
+                    FRY EXCHANGE - VPS DEPLOYMENT GUIDE
+================================================================================
+
+This guide provides complete step-by-step instructions to deploy Fry Exchange
+on a VPS server. No additional research required.
+
+================================================================================
+                           SYSTEM REQUIREMENTS
+================================================================================
+
+MINIMUM SPECIFICATIONS (Development/Testing):
+--------------------------------------------
+- CPU:      2 cores
+- RAM:      4 GB
+- Storage:  40 GB SSD
+- OS:       Ubuntu 22.04 LTS (or Debian 12)
+- Network:  Public IPv4 address
+- Bandwidth: 100 Mbps
+
+RECOMMENDED SPECIFICATIONS (Production):
+---------------------------------------
+- CPU:      4+ cores (8 cores for high traffic)
+- RAM:      8 GB (16 GB for high traffic)
+- Storage:  100 GB SSD (NVMe preferred)
+- OS:       Ubuntu 22.04 LTS
+- Network:  Public IPv4 + IPv6 address
+- Bandwidth: 1 Gbps
+
+WITH ALGORAND NODE (Add to above):
+----------------------------------
+- Additional RAM:     8 GB (16 GB total minimum)
+- Additional Storage: 100 GB SSD (for Algorand ledger data)
+- Total Recommended:  16 GB RAM, 200 GB SSD, 8 cores
+
+RECOMMENDED VPS PROVIDERS:
+--------------------------
+- Hetzner (EU): Great price/performance, ~$20-40/month for production specs
+- DigitalOcean: Easy setup, ~$48/month for 8GB/4CPU
+- Vultr: Good global coverage, ~$48/month for 8GB/4CPU
+- Linode: Reliable, ~$48/month for 8GB/4CPU
+- OVH: Cheap EU hosting, ~$25/month for production specs
+
+
+================================================================================
+                    PART 1: INITIAL SERVER SETUP
+================================================================================
+
+After receiving your VPS credentials, SSH into your server:
+
+    ssh root@YOUR_SERVER_IP
+
+--------------------------------------------------------------------------------
+STEP 1.1: Update System Packages
+--------------------------------------------------------------------------------
+
+    apt update && apt upgrade -y
+
+--------------------------------------------------------------------------------
+STEP 1.2: Create a Non-Root User (Security Best Practice)
+--------------------------------------------------------------------------------
+
+    adduser fryexchange
+    usermod -aG sudo fryexchange
+
+    # Copy SSH keys for the new user
+    mkdir -p /home/fryexchange/.ssh
+    cp ~/.ssh/authorized_keys /home/fryexchange/.ssh/
+    chown -R fryexchange:fryexchange /home/fryexchange/.ssh
+    chmod 700 /home/fryexchange/.ssh
+    chmod 600 /home/fryexchange/.ssh/authorized_keys
+
+--------------------------------------------------------------------------------
+STEP 1.3: Configure Firewall (UFW)
+--------------------------------------------------------------------------------
+
+    apt install ufw -y
+
+    # Default policies
+    ufw default deny incoming
+    ufw default allow outgoing
+
+    # Allow SSH (IMPORTANT: Do this before enabling!)
+    ufw allow 22/tcp
+
+    # Allow HTTP and HTTPS
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+
+    # Enable firewall
+    ufw enable
+
+    # Verify status
+    ufw status
+
+--------------------------------------------------------------------------------
+STEP 1.4: Configure SSH Security (Optional but Recommended)
+--------------------------------------------------------------------------------
+
+Edit SSH config:
+
+    nano /etc/ssh/sshd_config
+
+Make these changes:
+
+    PermitRootLogin no
+    PasswordAuthentication no
+    PubkeyAuthentication yes
+
+Restart SSH:
+
+    systemctl restart sshd
+
+Now log out and log back in as the new user:
+
+    exit
+    ssh fryexchange@YOUR_SERVER_IP
+
+
+================================================================================
+                    PART 2: INSTALL DEPENDENCIES
+================================================================================
+
+--------------------------------------------------------------------------------
+STEP 2.1: Install Essential Build Tools
+--------------------------------------------------------------------------------
+
+    sudo apt install -y build-essential git curl wget gnupg2 \
+        software-properties-common apt-transport-https ca-certificates
+
+--------------------------------------------------------------------------------
+STEP 2.2: Install Node.js 20 LTS
+--------------------------------------------------------------------------------
+
+    # Add NodeSource repository
+    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+
+    # Install Node.js
+    sudo apt install -y nodejs
+
+    # Verify installation
+    node --version    # Should show v20.x.x
+    npm --version     # Should show 10.x.x
+
+--------------------------------------------------------------------------------
+STEP 2.3: Install pnpm Package Manager
+--------------------------------------------------------------------------------
+
+    # Install pnpm globally
+    sudo npm install -g pnpm@8.15.0
+
+    # Verify installation
+    pnpm --version    # Should show 8.15.0
+
+--------------------------------------------------------------------------------
+STEP 2.4: Install PostgreSQL 16
+--------------------------------------------------------------------------------
+
+    # Add PostgreSQL official repository
+    sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+    wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+    sudo apt update
+
+    # Install PostgreSQL
+    sudo apt install -y postgresql-16 postgresql-contrib-16
+
+    # Start and enable PostgreSQL
+    sudo systemctl start postgresql
+    sudo systemctl enable postgresql
+
+    # Verify installation
+    sudo -u postgres psql -c "SELECT version();"
+
+--------------------------------------------------------------------------------
+STEP 2.5: Create PostgreSQL Database and User
+--------------------------------------------------------------------------------
+
+    # Switch to postgres user and open psql
+    sudo -u postgres psql
+
+In the PostgreSQL prompt, run:
+
+    -- Create database user (change 'your_secure_password' to a real password!)
+    CREATE USER fryexchange WITH PASSWORD 'your_secure_password';
+
+    -- Create database
+    CREATE DATABASE fry_exchange OWNER fryexchange;
+
+    -- Grant privileges
+    GRANT ALL PRIVILEGES ON DATABASE fry_exchange TO fryexchange;
+
+    -- Enable UUID extension (required by Prisma)
+    \c fry_exchange
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+    -- Exit
+    \q
+
+--------------------------------------------------------------------------------
+STEP 2.6: Install Redis
+--------------------------------------------------------------------------------
+
+    # Add Redis official repository
+    curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+    sudo apt update
+
+    # Install Redis
+    sudo apt install -y redis
+
+    # Start and enable Redis
+    sudo systemctl start redis-server
+    sudo systemctl enable redis-server
+
+    # Verify installation
+    redis-cli ping    # Should return PONG
+
+--------------------------------------------------------------------------------
+STEP 2.7: Secure Redis (Optional but Recommended)
+--------------------------------------------------------------------------------
+
+    sudo nano /etc/redis/redis.conf
+
+Find and modify these lines:
+
+    # Bind to localhost only
+    bind 127.0.0.1 ::1
+
+    # Set a password (change to your own!)
+    requirepass your_redis_password
+
+    # Disable dangerous commands
+    rename-command FLUSHDB ""
+    rename-command FLUSHALL ""
+    rename-command CONFIG ""
+
+Restart Redis:
+
+    sudo systemctl restart redis-server
+
+--------------------------------------------------------------------------------
+STEP 2.8: Install Nginx (Reverse Proxy)
+--------------------------------------------------------------------------------
+
+    sudo apt install -y nginx
+
+    # Start and enable Nginx
+    sudo systemctl start nginx
+    sudo systemctl enable nginx
+
+    # Verify it's running
+    sudo systemctl status nginx
+
+--------------------------------------------------------------------------------
+STEP 2.9: Install PM2 (Process Manager)
+--------------------------------------------------------------------------------
+
+    sudo npm install -g pm2
+
+    # Set up PM2 to start on boot
+    pm2 startup systemd -u fryexchange --hp /home/fryexchange
+
+    # (Run the command it outputs if any)
+
+
+================================================================================
+                    PART 3: DEPLOY FRY EXCHANGE
+================================================================================
+
+--------------------------------------------------------------------------------
+STEP 3.1: Clone the Repository
+--------------------------------------------------------------------------------
+
+    cd /home/fryexchange
+    git clone https://github.com/Fry-Foundation/fry-exchange.git
+    cd fry-exchange
+
+--------------------------------------------------------------------------------
+STEP 3.2: Install Project Dependencies
+--------------------------------------------------------------------------------
+
+    pnpm install
+
+This will install all dependencies for the monorepo.
+
+--------------------------------------------------------------------------------
+STEP 3.3: Create Environment Configuration
+--------------------------------------------------------------------------------
+
+    cp .env.example .env
+    nano .env
+
+Configure your .env file with production values:
+
+    #===========================================================================
+    # DATABASE
+    #===========================================================================
+    DATABASE_URL=postgresql://fryexchange:your_secure_password@localhost:5432/fry_exchange
+    DATABASE_POOL_SIZE=20
+
+    #===========================================================================
+    # REDIS
+    #===========================================================================
+    REDIS_URL=redis://localhost:6379
+    REDIS_PASSWORD=your_redis_password
+
+    #===========================================================================
+    # JWT AUTHENTICATION (GENERATE SECURE RANDOM STRINGS!)
+    #===========================================================================
+    # Generate with: openssl rand -base64 64
+    JWT_SECRET=GENERATE_A_64_CHARACTER_RANDOM_STRING_HERE
+    JWT_REFRESH_SECRET=GENERATE_ANOTHER_64_CHARACTER_RANDOM_STRING_HERE
+    JWT_EXPIRES_IN=15m
+    JWT_REFRESH_EXPIRES_IN=7d
+
+    #===========================================================================
+    # API SERVER
+    #===========================================================================
+    API_PORT=3000
+    API_HOST=0.0.0.0
+
+    # Set to your actual domain(s), comma-separated
+    CORS_ORIGINS=https://exchange.yourdomain.com
+
+    #===========================================================================
+    # BLOCKCHAIN RPC ENDPOINTS
+    #===========================================================================
+    # Algorand (defaults to public Algonode, or use your own node - see Part 5)
+    ALGORAND_API_URL=https://mainnet-api.algonode.cloud
+    ALGORAND_INDEXER_URL=https://mainnet-idx.algonode.cloud
+
+    # For other chains, add your RPC URLs (Infura, Alchemy, etc.)
+    SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+    ETHEREUM_RPC_URL=https://mainnet.infura.io/v3/YOUR_INFURA_KEY
+    BSC_RPC_URL=https://bsc-dataseed.binance.org
+
+    #===========================================================================
+    # RATE LIMITING
+    #===========================================================================
+    RATE_LIMIT_WINDOW_MS=60000
+    RATE_LIMIT_MAX_REQUESTS=100
+
+    #===========================================================================
+    # LOGGING
+    #===========================================================================
+    LOG_LEVEL=info
+    LOG_FORMAT=json
+
+    #===========================================================================
+    # ENVIRONMENT
+    #===========================================================================
+    NODE_ENV=production
+
+To generate secure JWT secrets:
+
+    openssl rand -base64 64
+
+--------------------------------------------------------------------------------
+STEP 3.4: Build the Application
+--------------------------------------------------------------------------------
+
+    pnpm build
+
+This builds all packages in the correct order.
+
+--------------------------------------------------------------------------------
+STEP 3.5: Run Database Migrations
+--------------------------------------------------------------------------------
+
+    # Generate Prisma client
+    pnpm db:generate
+
+    # Apply database migrations
+    pnpm db:migrate
+
+    # (Optional) Seed the database with initial data
+    # pnpm db:seed
+
+--------------------------------------------------------------------------------
+STEP 3.6: Test the Application
+--------------------------------------------------------------------------------
+
+Before setting up PM2, test that everything works:
+
+    # Start the API server
+    pnpm --filter @fry-exchange/exchange-api start
+
+In another terminal, test the health endpoint:
+
+    curl http://localhost:3000/health
+
+You should see a JSON response indicating the server is healthy.
+
+Stop the test with Ctrl+C.
+
+
+================================================================================
+                    PART 4: PRODUCTION CONFIGURATION
+================================================================================
+
+--------------------------------------------------------------------------------
+STEP 4.1: Configure PM2 Process Management
+--------------------------------------------------------------------------------
+
+Create PM2 ecosystem file:
+
+    nano /home/fryexchange/fry-exchange/ecosystem.config.js
+
+Add this content:
+
+    module.exports = {
+      apps: [
+        {
+          name: 'fry-api',
+          cwd: '/home/fryexchange/fry-exchange/apps/exchange-api',
+          script: 'dist/index.js',
+          instances: 'max',
+          exec_mode: 'cluster',
+          env: {
+            NODE_ENV: 'production',
+          },
+          max_memory_restart: '1G',
+          error_file: '/home/fryexchange/logs/fry-api-error.log',
+          out_file: '/home/fryexchange/logs/fry-api-out.log',
+          log_file: '/home/fryexchange/logs/fry-api-combined.log',
+          time: true,
+        },
+        {
+          name: 'fry-web',
+          cwd: '/home/fryexchange/fry-exchange/apps/web',
+          script: 'node_modules/.bin/next',
+          args: 'start -p 3001',
+          instances: 1,
+          exec_mode: 'fork',
+          env: {
+            NODE_ENV: 'production',
+          },
+          max_memory_restart: '500M',
+          error_file: '/home/fryexchange/logs/fry-web-error.log',
+          out_file: '/home/fryexchange/logs/fry-web-out.log',
+          log_file: '/home/fryexchange/logs/fry-web-combined.log',
+          time: true,
+        },
+      ],
+    };
+
+Create logs directory:
+
+    mkdir -p /home/fryexchange/logs
+
+--------------------------------------------------------------------------------
+STEP 4.2: Start Application with PM2
+--------------------------------------------------------------------------------
+
+    cd /home/fryexchange/fry-exchange
+    pm2 start ecosystem.config.js
+
+    # Save PM2 configuration (persists across reboots)
+    pm2 save
+
+    # View running processes
+    pm2 status
+
+    # View logs
+    pm2 logs
+
+--------------------------------------------------------------------------------
+STEP 4.3: Configure Nginx Reverse Proxy
+--------------------------------------------------------------------------------
+
+Create Nginx site configuration:
+
+    sudo nano /etc/nginx/sites-available/fry-exchange
+
+Add this content (replace YOUR_DOMAIN with your actual domain):
+
+    # Rate limiting zone
+    limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+
+    # API Server
+    upstream fry_api {
+        least_conn;
+        server 127.0.0.1:3000;
+        keepalive 64;
+    }
+
+    # Web Frontend
+    upstream fry_web {
+        server 127.0.0.1:3001;
+        keepalive 32;
+    }
+
+    # Redirect HTTP to HTTPS
+    server {
+        listen 80;
+        listen [::]:80;
+        server_name YOUR_DOMAIN www.YOUR_DOMAIN;
+        return 301 https://$server_name$request_uri;
+    }
+
+    # Main HTTPS server
+    server {
+        listen 443 ssl http2;
+        listen [::]:443 ssl http2;
+        server_name YOUR_DOMAIN www.YOUR_DOMAIN;
+
+        # SSL configuration (will be managed by Certbot)
+        ssl_certificate /etc/letsencrypt/live/YOUR_DOMAIN/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/YOUR_DOMAIN/privkey.pem;
+        ssl_session_timeout 1d;
+        ssl_session_cache shared:SSL:50m;
+        ssl_session_tickets off;
+
+        # Modern SSL configuration
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+        ssl_prefer_server_ciphers off;
+
+        # Security headers
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Strict-Transport-Security "max-age=63072000" always;
+
+        # Gzip compression
+        gzip on;
+        gzip_vary on;
+        gzip_proxied any;
+        gzip_comp_level 6;
+        gzip_types text/plain text/css text/xml application/json application/javascript application/rss+xml application/atom+xml image/svg+xml;
+
+        # API endpoints
+        location /api/ {
+            limit_req zone=api_limit burst=20 nodelay;
+
+            proxy_pass http://fry_api;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection 'upgrade';
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_cache_bypass $http_upgrade;
+            proxy_read_timeout 300s;
+            proxy_connect_timeout 75s;
+        }
+
+        # WebSocket endpoint
+        location /ws {
+            proxy_pass http://fry_api;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_read_timeout 86400;
+        }
+
+        # Health check (no rate limiting)
+        location /health {
+            proxy_pass http://fry_api;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # Frontend (everything else)
+        location / {
+            proxy_pass http://fry_web;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection 'upgrade';
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_cache_bypass $http_upgrade;
+        }
+    }
+
+Enable the site:
+
+    sudo ln -s /etc/nginx/sites-available/fry-exchange /etc/nginx/sites-enabled/
+    sudo rm /etc/nginx/sites-enabled/default    # Remove default site
+
+    # Test configuration
+    sudo nginx -t
+
+    # Reload Nginx
+    sudo systemctl reload nginx
+
+--------------------------------------------------------------------------------
+STEP 4.4: Install SSL Certificate (Let's Encrypt)
+--------------------------------------------------------------------------------
+
+    # Install Certbot
+    sudo apt install -y certbot python3-certbot-nginx
+
+    # Obtain certificate (temporarily allow HTTP for verification)
+    # Make sure your domain DNS points to this server first!
+    sudo certbot --nginx -d YOUR_DOMAIN -d www.YOUR_DOMAIN
+
+    # Follow the prompts:
+    # - Enter email for renewal notifications
+    # - Agree to terms of service
+    # - Choose whether to redirect HTTP to HTTPS (choose yes)
+
+    # Test automatic renewal
+    sudo certbot renew --dry-run
+
+Certbot automatically sets up a cron job for certificate renewal.
+
+--------------------------------------------------------------------------------
+STEP 4.5: Set Up Log Rotation
+--------------------------------------------------------------------------------
+
+    sudo nano /etc/logrotate.d/fry-exchange
+
+Add this content:
+
+    /home/fryexchange/logs/*.log {
+        daily
+        missingok
+        rotate 14
+        compress
+        delaycompress
+        notifempty
+        create 0640 fryexchange fryexchange
+        sharedscripts
+        postrotate
+            pm2 reloadLogs
+        endscript
+    }
+
+
+================================================================================
+                    PART 5: OPTIONAL - SELF-HOSTED ALGORAND NODE
+================================================================================
+
+Running your own Algorand node eliminates dependency on third-party services
+like Algonode/Nodely and provides better reliability and performance.
+
+ADDITIONAL REQUIREMENTS:
+- Extra 8 GB RAM (16 GB total recommended)
+- Extra 100 GB SSD storage (for ledger data)
+- Stable internet connection
+
+--------------------------------------------------------------------------------
+STEP 5.1: Install Algorand Node
+--------------------------------------------------------------------------------
+
+    # Create algorand user
+    sudo adduser --disabled-password --gecos "" algorand
+    sudo usermod -aG sudo algorand
+
+    # Add Algorand repository
+    curl -o - https://releases.algorand.com/key.pub | sudo tee /etc/apt/trusted.gpg.d/algorand.asc
+    sudo add-apt-repository "deb [arch=amd64] https://releases.algorand.com/deb/ stable main"
+    sudo apt update
+
+    # Install Algorand node and tools
+    sudo apt install -y algorand algorand-devtools
+
+--------------------------------------------------------------------------------
+STEP 5.2: Configure Algorand Node
+--------------------------------------------------------------------------------
+
+The default data directory is: /var/lib/algorand
+
+    # Switch to algorand user for configuration
+    sudo su - algorand
+
+    # Create config.json
+    cat > /var/lib/algorand/config.json << 'EOF'
+{
+    "EndpointAddress": "127.0.0.1:8080",
+    "DNSBootstrapID": "<network>.algorand.network",
+    "EnableDeveloperAPI": true,
+    "EnableMetricReporting": false,
+    "EnableProfiler": false,
+    "EnableFollowMode": false,
+    "CatchupParallelBlocks": 16,
+    "MaxConnectionsPerIP": 30,
+    "ConnectionsRateLimitingWindowSeconds": 1,
+    "ConnectionsRateLimitingCount": 60,
+    "ReservedFDs": 256,
+    "RestReadTimeoutSeconds": 15,
+    "RestWriteTimeoutSeconds": 120,
+    "IncomingConnectionsLimit": 800,
+    "Archival": false,
+    "IsIndexerActive": false
+}
+EOF
+
+    exit
+
+--------------------------------------------------------------------------------
+STEP 5.3: Generate API Token
+--------------------------------------------------------------------------------
+
+    # The API token is auto-generated in:
+    sudo cat /var/lib/algorand/algod.token
+
+    # Save this token - you'll need it for your .env file
+
+--------------------------------------------------------------------------------
+STEP 5.4: Start Algorand Node
+--------------------------------------------------------------------------------
+
+    # Start the node service
+    sudo systemctl start algorand
+    sudo systemctl enable algorand
+
+    # Check status
+    goal node status -d /var/lib/algorand
+
+Initially, the node needs to sync with the network. Check sync status:
+
+    goal node status -d /var/lib/algorand
+
+Look for "Sync Time" - when it shows "0.0s", your node is fully synced.
+
+--------------------------------------------------------------------------------
+STEP 5.5: Fast Catchup (Skip Waiting for Full Sync)
+--------------------------------------------------------------------------------
+
+Fast catchup downloads a snapshot to speed up syncing significantly:
+
+    # Get latest catchpoint from Algorand
+    # For MainNet:
+    CATCHPOINT=$(curl -s https://algorand-catchpoints.s3.us-east-2.amazonaws.com/channel/mainnet/latest.catchpoint)
+
+    # Apply catchpoint
+    goal node catchup $CATCHPOINT -d /var/lib/algorand
+
+    # Monitor progress
+    goal node status -d /var/lib/algorand -w 1000
+
+Fast catchup typically completes in 30-60 minutes depending on your connection.
+
+--------------------------------------------------------------------------------
+STEP 5.6: Install and Configure Indexer (Required for Full Functionality)
+--------------------------------------------------------------------------------
+
+The Indexer provides search and lookup functionality for transactions and assets.
+
+    # Install PostgreSQL for Indexer (if not already installed)
+    # It's already installed from Part 2, so create indexer database:
+    sudo -u postgres psql
+
+    CREATE USER algorand_indexer WITH PASSWORD 'your_indexer_password';
+    CREATE DATABASE algorand_indexer OWNER algorand_indexer;
+    \q
+
+    # Download Indexer
+    cd /tmp
+    wget https://github.com/algorand/indexer/releases/download/v3.5.0/algorand-indexer_Linux_amd64.tar.gz
+    tar -xzf algorand-indexer_Linux_amd64.tar.gz
+    sudo mv algorand-indexer /usr/local/bin/
+
+    # Create Indexer data directory
+    sudo mkdir -p /var/lib/algorand-indexer
+    sudo chown algorand:algorand /var/lib/algorand-indexer
+
+Create Indexer service file:
+
+    sudo nano /etc/systemd/system/algorand-indexer.service
+
+Add this content:
+
+    [Unit]
+    Description=Algorand Indexer
+    After=network.target algorand.service postgresql.service
+
+    [Service]
+    Type=simple
+    User=algorand
+    Group=algorand
+    ExecStart=/usr/local/bin/algorand-indexer daemon \
+        --algod-net="127.0.0.1:8080" \
+        --algod-token="YOUR_ALGOD_TOKEN_FROM_STEP_5.3" \
+        --postgres="host=localhost port=5432 user=algorand_indexer password=your_indexer_password dbname=algorand_indexer sslmode=disable" \
+        --server="127.0.0.1:8980"
+    Restart=always
+    RestartSec=10
+    StandardOutput=journal
+    StandardError=journal
+
+    [Install]
+    WantedBy=multi-user.target
+
+Start Indexer:
+
+    sudo systemctl daemon-reload
+    sudo systemctl start algorand-indexer
+    sudo systemctl enable algorand-indexer
+
+    # Check status
+    sudo systemctl status algorand-indexer
+
+--------------------------------------------------------------------------------
+STEP 5.7: Update Fry Exchange to Use Local Node
+--------------------------------------------------------------------------------
+
+Edit your .env file:
+
+    nano /home/fryexchange/fry-exchange/.env
+
+Update the Algorand settings:
+
+    # Point to your local Algorand node
+    ALGORAND_API_URL=http://127.0.0.1:8080
+    ALGORAND_API_TOKEN=YOUR_ALGOD_TOKEN_FROM_STEP_5.3
+
+    # Point to your local Indexer
+    ALGORAND_INDEXER_URL=http://127.0.0.1:8980
+
+Restart the application:
+
+    pm2 restart all
+
+--------------------------------------------------------------------------------
+STEP 5.8: Verify Algorand Node is Working
+--------------------------------------------------------------------------------
+
+Test the node API:
+
+    # Check node status
+    curl -H "X-Algo-API-Token: YOUR_TOKEN" http://127.0.0.1:8080/v2/status
+
+Test the Indexer:
+
+    # Check Indexer health
+    curl http://127.0.0.1:8980/health
+
+--------------------------------------------------------------------------------
+STEP 5.9: Algorand Node Maintenance
+--------------------------------------------------------------------------------
+
+Monitor node status:
+
+    goal node status -d /var/lib/algorand
+
+View node logs:
+
+    sudo journalctl -u algorand -f
+
+Update Algorand node:
+
+    sudo apt update && sudo apt upgrade algorand algorand-devtools
+
+Check disk usage:
+
+    du -sh /var/lib/algorand
+
+Restart node if needed:
+
+    sudo systemctl restart algorand
+
+
+================================================================================
+                    PART 6: MAINTENANCE & MONITORING
+================================================================================
+
+--------------------------------------------------------------------------------
+STEP 6.1: Useful PM2 Commands
+--------------------------------------------------------------------------------
+
+    # View all processes
+    pm2 status
+
+    # View logs
+    pm2 logs
+    pm2 logs fry-api
+    pm2 logs fry-web
+
+    # Restart all processes
+    pm2 restart all
+
+    # Restart specific process
+    pm2 restart fry-api
+
+    # Stop all processes
+    pm2 stop all
+
+    # Delete all processes
+    pm2 delete all
+
+    # Monitor CPU/Memory
+    pm2 monit
+
+--------------------------------------------------------------------------------
+STEP 6.2: Database Backup
+--------------------------------------------------------------------------------
+
+Create backup script:
+
+    mkdir -p /home/fryexchange/backups
+    nano /home/fryexchange/backup-db.sh
+
+Add this content:
+
+    #!/bin/bash
+    BACKUP_DIR="/home/fryexchange/backups"
+    TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+    FILENAME="fry_exchange_${TIMESTAMP}.sql.gz"
+
+    pg_dump -U fryexchange -h localhost fry_exchange | gzip > "${BACKUP_DIR}/${FILENAME}"
+
+    # Keep only last 7 days of backups
+    find ${BACKUP_DIR} -name "fry_exchange_*.sql.gz" -mtime +7 -delete
+
+    echo "Backup completed: ${FILENAME}"
+
+Make it executable and add to cron:
+
+    chmod +x /home/fryexchange/backup-db.sh
+
+    # Add to crontab (runs daily at 3 AM)
+    crontab -e
+
+    # Add this line:
+    0 3 * * * /home/fryexchange/backup-db.sh >> /home/fryexchange/logs/backup.log 2>&1
+
+--------------------------------------------------------------------------------
+STEP 6.3: Update Application
+--------------------------------------------------------------------------------
+
+To update Fry Exchange to the latest version:
+
+    cd /home/fryexchange/fry-exchange
+
+    # Pull latest changes
+    git pull origin main
+
+    # Install any new dependencies
+    pnpm install
+
+    # Rebuild
+    pnpm build
+
+    # Run migrations if any
+    pnpm db:migrate
+
+    # Restart application
+    pm2 restart all
+
+--------------------------------------------------------------------------------
+STEP 6.4: Server Monitoring (Optional)
+--------------------------------------------------------------------------------
+
+Install htop for system monitoring:
+
+    sudo apt install htop
+    htop
+
+Install netdata for web-based monitoring (optional):
+
+    bash <(curl -Ss https://my-netdata.io/kickstart.sh)
+
+    # Access at http://YOUR_IP:19999
+
+--------------------------------------------------------------------------------
+STEP 6.5: Security Hardening (Optional)
+--------------------------------------------------------------------------------
+
+Install fail2ban to prevent brute force attacks:
+
+    sudo apt install fail2ban
+
+    sudo nano /etc/fail2ban/jail.local
+
+Add:
+
+    [sshd]
+    enabled = true
+    port = 22
+    filter = sshd
+    logpath = /var/log/auth.log
+    maxretry = 5
+    bantime = 3600
+
+    sudo systemctl enable fail2ban
+    sudo systemctl start fail2ban
+
+
+================================================================================
+                    TROUBLESHOOTING
+================================================================================
+
+PROBLEM: API server won't start
+-------------------------------
+1. Check logs: pm2 logs fry-api
+2. Verify DATABASE_URL is correct
+3. Ensure PostgreSQL is running: sudo systemctl status postgresql
+4. Check Redis is running: redis-cli ping
+
+PROBLEM: Database connection failed
+-----------------------------------
+1. Verify PostgreSQL is running: sudo systemctl status postgresql
+2. Test connection: psql -U fryexchange -h localhost -d fry_exchange
+3. Check firewall: sudo ufw status
+
+PROBLEM: Redis connection failed
+--------------------------------
+1. Verify Redis is running: sudo systemctl status redis-server
+2. Test connection: redis-cli ping
+3. If using password: redis-cli -a YOUR_PASSWORD ping
+
+PROBLEM: Nginx shows 502 Bad Gateway
+------------------------------------
+1. Check if backend is running: pm2 status
+2. Check Nginx logs: sudo tail -f /var/log/nginx/error.log
+3. Verify upstream port in Nginx config matches app port
+
+PROBLEM: SSL certificate issues
+-------------------------------
+1. Check certificate status: sudo certbot certificates
+2. Test renewal: sudo certbot renew --dry-run
+3. Check Nginx SSL config: sudo nginx -t
+
+PROBLEM: Algorand node not syncing
+----------------------------------
+1. Check status: goal node status -d /var/lib/algorand
+2. Check logs: sudo journalctl -u algorand -f
+3. Verify port 4160 is not blocked
+4. Try fast catchup again
+
+
+================================================================================
+                    QUICK REFERENCE
+================================================================================
+
+IMPORTANT PATHS:
+- Application:    /home/fryexchange/fry-exchange
+- Logs:           /home/fryexchange/logs
+- Backups:        /home/fryexchange/backups
+- Nginx config:   /etc/nginx/sites-available/fry-exchange
+- PostgreSQL:     /var/lib/postgresql/16/main
+- Redis:          /var/lib/redis
+- Algorand:       /var/lib/algorand
+
+IMPORTANT PORTS:
+- SSH:            22
+- HTTP:           80
+- HTTPS:          443
+- API (internal): 3000
+- Web (internal): 3001
+- PostgreSQL:     5432
+- Redis:          6379
+- Algorand API:   8080
+- Algorand Index: 8980
+
+COMMON COMMANDS:
+- Start app:      pm2 start ecosystem.config.js
+- Stop app:       pm2 stop all
+- Restart app:    pm2 restart all
+- View logs:      pm2 logs
+- Build app:      pnpm build
+- Run migrations: pnpm db:migrate
+- Nginx reload:   sudo systemctl reload nginx
+
+
+================================================================================
+                    SUPPORT & RESOURCES
+================================================================================
+
+Fry Exchange GitHub:
+https://github.com/Fry-Foundation/fry-exchange
+
+Algorand Developer Documentation:
+https://developer.algorand.org/docs/
+
+Algorand Node Setup Guide:
+https://developer.algorand.org/docs/run-a-node/setup/install/
+
+PM2 Documentation:
+https://pm2.keymetrics.io/docs/usage/quick-start/
+
+Nginx Documentation:
+https://nginx.org/en/docs/
+
+Let's Encrypt Documentation:
+https://certbot.eff.org/docs/
+
+================================================================================
+                    END OF GUIDE
+================================================================================

@@ -6,6 +6,7 @@ import { OrderForm } from '@/components/trading/OrderForm';
 import { OrderBook } from '@/components/trading/OrderBook';
 import { TradeHistory } from '@/components/trading/TradeHistory';
 import { MarketSelector } from '@/components/trading/MarketSelector';
+import { TradingChart } from '@/components/trading/TradingChart';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 // Mock data
@@ -91,21 +92,8 @@ export default function TradePage() {
           <div className="grid gap-4 lg:grid-cols-[1fr_300px_300px]">
             {/* Chart Area */}
             <div className="lg:row-span-2">
-              <Card className="h-[600px]">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">
-                    {selectedSymbol} Chart
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="flex h-[calc(100%-60px)] items-center justify-center text-muted-foreground">
-                  {/* TradingView or lightweight-charts would go here */}
-                  <div className="text-center">
-                    <p className="text-lg font-medium">Trading Chart</p>
-                    <p className="text-sm">
-                      Integrate TradingView or lightweight-charts here
-                    </p>
-                  </div>
-                </CardContent>
+              <Card className="h-[600px] overflow-hidden">
+                <TradingChart symbol={selectedSymbol} />
               </Card>
             </div>
 

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import '@/styles/globals.css';
+import { Providers } from '@/components/providers';
 
 export const metadata: Metadata = {
   title: 'Fry Exchange | Trade Crypto with Confidence',
@@ -32,7 +33,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className="min-h-screen bg-background font-sans antialiased">
-        {children}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

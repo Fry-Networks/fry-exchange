@@ -13,9 +13,12 @@ export interface JWTConfig {
   refreshExpiresIn: string;
 }
 
+const INSECURE_DEFAULT_SECRET = 'development-secret';
+const INSECURE_DEFAULT_REFRESH_SECRET = 'development-refresh-secret';
+
 let config: JWTConfig = {
-  secret: process.env.JWT_SECRET || 'development-secret',
-  refreshSecret: process.env.JWT_REFRESH_SECRET || 'development-refresh-secret',
+  secret: process.env.JWT_SECRET || INSECURE_DEFAULT_SECRET,
+  refreshSecret: process.env.JWT_REFRESH_SECRET || INSECURE_DEFAULT_REFRESH_SECRET,
   expiresIn: process.env.JWT_EXPIRES_IN || '15m',
   refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
 };
@@ -24,23 +27,36 @@ export function configureJWT(newConfig: Partial<JWTConfig>): void {
   config = { ...config, ...newConfig };
 }
 
+/** Refuses to sign/verify with the well-known open-source default secret. */
+function assertSecretConfigured(secret: string, envVarName: string): void {
+  if (secret === INSECURE_DEFAULT_SECRET || secret === INSECURE_DEFAULT_REFRESH_SECRET) {
+    throw new Error(
+      `${envVarName} is not configured — set it (or call configureJWT()) before issuing or verifying tokens`
+    );
+  }
+}
+
 export function generateAccessToken(payload: JWTPayload): string {
+  assertSecretConfigured(config.secret, 'JWT_SECRET');
   return jwt.sign(payload, config.secret, {
     expiresIn: config.expiresIn,
   });
 }
 
 export function generateRefreshToken(payload: { userId: string }): string {
+  assertSecretConfigured(config.refreshSecret, 'JWT_REFRESH_SECRET');
   return jwt.sign(payload, config.refreshSecret, {
     expiresIn: config.refreshExpiresIn,
   });
 }
 
 export function verifyAccessToken(token: string): JWTPayload {
+  assertSecretConfigured(config.secret, 'JWT_SECRET');
   return jwt.verify(token, config.secret) as JWTPayload;
 }
 
 export function verifyRefreshToken(token: string): { userId: string } {
+  assertSecretConfigured(config.refreshSecret, 'JWT_REFRESH_SECRET');
   return jwt.verify(token, config.refreshSecret) as { userId: string };
 }
 
